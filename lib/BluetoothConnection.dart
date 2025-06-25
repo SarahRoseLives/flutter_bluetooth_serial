@@ -52,15 +52,19 @@ class BluetoothConnection {
             );
 
     input = _readStreamController.stream;
-    output = _BluetoothStreamSink<Uint8List>(id);
+  	output = _BluetoothStreamSink<Uint8List>(id);
   }
 
-  /// Returns connection to given address.
-  static Future<BluetoothConnection> toAddress(String? address) async {
+  /// Returns connection to given address. You can specify the RFCOMM port to connect to.
+  static Future<BluetoothConnection> toAddress(String? address, {int? port}) async {
     // Sorry for pseudo-factory, but `factory` keyword disallows `Future`.
-    return BluetoothConnection._consumeConnectionID(await FlutterBluetoothSerial
-        ._methodChannel
-        .invokeMethod('connect', {"address": address}));
+    final Map<String, dynamic> arguments = {'address': address};
+    if (port != null) {
+      arguments['port'] = port;
+    }
+  	return BluetoothConnection._consumeConnectionID(
+        await FlutterBluetoothSerial._methodChannel.invokeMethod('connect', arguments)
+    );
   }
 
   /// Should be called to make sure the connection is closed and resources are freed (sockets/channels).
@@ -71,12 +75,12 @@ class BluetoothConnection {
   /// Closes connection (rather immediately), in result should also disconnect.
   Future<void> close() {
     return Future.wait([
-      output.close(),
-      _readStreamSubscription.cancel(),
-      (!_readStreamController.isClosed)
-          ? _readStreamController.close()
-          : Future.value(/* Empty future */)
-    ], eagerError: true);
+  	output.close(),
+  	_readStreamSubscription.cancel(),
+  	(!_readStreamController.isClosed)
+  		? _readStreamController.close()
+  		: Future.value(/* Empty future */)
+  	], eagerError: true);
   }
 
   /// Closes connection (rather immediately), in result should also disconnect.
@@ -107,16 +111,16 @@ class _BluetoothStreamSink<Uint8List> extends StreamSink<Uint8List> {
 
   _BluetoothStreamSink(this._id) {
     // `_doneFuture` must be initialized here because `close` must return the same future.
-    // If it would be in `done` get body, it would result in creating new futures every call.
-    _doneFuture = Future(() async {
-      // @TODO ? is there any better way to do it? xD this below is weird af
-      while (this.isConnected) {
-        await Future.delayed(Duration(milliseconds: 111));
-      }
-      if (this.exception != null) {
-        throw this.exception;
-      }
-    });
+  	// If it would be in `done` get body, it would result in creating new futures every call.
+  	_doneFuture = Future(() async {
+  	  // @TODO ? is there any better way to do it? xD this below is weird af
+  	  while (this.isConnected) {
+  		await Future.delayed(Duration(milliseconds: 111));
+  	  }
+  	  if (this.exception != null) {
+  		throw this.exception;
+  	  }
+  	});
   }
 
   /// Adds raw bytes to the output sink.
@@ -130,50 +134,50 @@ class _BluetoothStreamSink<Uint8List> extends StreamSink<Uint8List> {
   /// Might throw `StateError("Not connected!")` if not connected.
   @override
   void add(Uint8List data) {
-    if (!isConnected) {
-      throw StateError("Not connected!");
-    }
+  	if (!isConnected) {
+  	  throw StateError("Not connected!");
+  	}
 
-    _chainedFutures = _chainedFutures.then((_) async {
-      if (!isConnected) {
-        throw StateError("Not connected!");
-      }
+  	_chainedFutures = _chainedFutures.then((_) async {
+  	  if (!isConnected) {
+  		throw StateError("Not connected!");
+  	  }
 
-      await FlutterBluetoothSerial._methodChannel
-          .invokeMethod('write', {'id': _id, 'bytes': data});
-    }).catchError((e) {
-      this.exception = e;
-      close();
-    });
+  	  await FlutterBluetoothSerial._methodChannel
+  		  .invokeMethod('write', {'id': _id, 'bytes': data});
+  	}).catchError((e) {
+  	  this.exception = e;
+  	  close();
+  	});
   }
 
   /// Unsupported - this ouput sink cannot pass errors to platfom code.
   @override
   void addError(Object error, [StackTrace? stackTrace]) {
-    throw UnsupportedError(
-        "BluetoothConnection output (response) sink cannot receive errors!");
+  	throw UnsupportedError(
+  		"BluetoothConnection output (response) sink cannot receive errors!");
   }
 
   @override
   Future addStream(Stream<Uint8List> stream) => Future(() async {
-        // @TODO ??? `addStream`, "alternating simultaneous addition" problem (read below)
-        // If `onDone` were called some time after last `add` to the stream (what is okay),
-        // this `addStream` function might wait not for the last "own" addition to this sink,
-        // but might wait for last addition at the moment of the `onDone`.
-        // This can happen if user of the library would use another `add` related function
-        // while `addStream` still in-going. We could do something about it, but this seems
-        // not to be so necessary since `StreamSink` specifies that `addStream` should be
-        // blocking for other forms of `add`ition on the sink.
-        var completer = Completer();
-        stream.listen(this.add).onDone(completer.complete);
-        await completer.future;
-        await _chainedFutures; // Wait last* `add` of the stream to be fulfilled
-      });
+  		// @TODO ??? `addStream`, "alternating simultaneous addition" problem (read below)
+  		// If `onDone` were called some time after last `add` to the stream (what is okay),
+  		// this `addStream` function might wait not for the last "own" addition to this sink,
+  		// but might wait for last addition at the moment of the `onDone`.
+  		// This can happen if user of the library would use another `add` related function
+  		// while `addStream` still in-going. We could do something about it, but this seems
+  		// not to be so necessary since `StreamSink` specifies that `addStream` should be
+  		// blocking for other forms of `add`ition on the sink.
+  		var completer = Completer();
+  		stream.listen(this.add).onDone(completer.complete);
+  		await completer.future;
+  		await _chainedFutures; // Wait last* `add` of the stream to be fulfilled
+  	  });
 
   @override
   Future close() {
-    isConnected = false;
-    return this.done;
+  	isConnected = false;
+  	return this.done;
   }
 
   @override
@@ -188,20 +192,20 @@ class _BluetoothStreamSink<Uint8List> extends StreamSink<Uint8List> {
   ///
   /// Otherwise, the returned future will complete when either:
   Future get allSent => Future(() async {
-        // Simple `await` can't get job done here, because the `_chainedFutures` member
-        // in one access time provides last Future, then `await`ing for it allows the library
-        // user to add more futures on top of the waited-out Future.
-        Future lastFuture;
-        do {
-          lastFuture = this._chainedFutures;
-          await lastFuture;
-        } while (lastFuture != this._chainedFutures);
+  		// Simple `await` can't get job done here, because the `_chainedFutures` member
+  		// in one access time provides last Future, then `await`ing for it allows the library
+  		// user to add more futures on top of the waited-out Future.
+  		Future lastFuture;
+  		do {
+  		  lastFuture = this._chainedFutures;
+  		  await lastFuture;
+  		} while (lastFuture != this._chainedFutures);
 
-        if (this.exception != null) {
-          throw this.exception;
-        }
+  		if (this.exception != null) {
+  		  throw this.exception;
+  		}
 
-        this._chainedFutures =
-            Future.value(); // Just in case if Dart VM is retarded
-      });
+  		this._chainedFutures =
+  			  Future.value(); // Just in case if Dart VM is retarded
+  	  });
 }

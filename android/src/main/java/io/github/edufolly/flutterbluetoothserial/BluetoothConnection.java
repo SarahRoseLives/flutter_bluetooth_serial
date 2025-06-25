@@ -5,6 +5,9 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.UUID;
 import java.util.Arrays;
+import java.lang.reflect.Method;
+import java.lang.reflect.InvocationTargetException;
+
 
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
@@ -23,19 +26,18 @@ public abstract class BluetoothConnection
         return connectionThread != null && connectionThread.requestedClosing != true;
     }
 
-
-
     public BluetoothConnection(BluetoothAdapter bluetoothAdapter) {
         this.bluetoothAdapter = bluetoothAdapter;
     }
 
-
-
-    // @TODO . `connect` could be done perfored on the other thread
-    // @TODO . `connect` parameter: timeout
-    // @TODO . `connect` other methods than `createRfcommSocketToServiceRecord`, including hidden one raw `createRfcommSocket` (on channel).
-    // @TODO ? how about turning it into factoried?
-    /// Connects to given device by hardware address
+    /**
+     * Connects to a given device by its hardware address and service UUID.
+     * The method discovers the RFCOMM channel associated with the UUID and connects to it.
+     *
+     * @param address The MAC address of the remote device.
+     * @param uuid The UUID of the service to connect to.
+     * @throws IOException if the connection fails.
+     */
     public void connect(String address, UUID uuid) throws IOException {
         if (isConnected()) {
             throw new IOException("already connected");
@@ -46,12 +48,13 @@ public abstract class BluetoothConnection
             throw new IOException("device not found");
         }
 
-        BluetoothSocket socket = device.createRfcommSocketToServiceRecord(uuid); // @TODO . introduce ConnectionMethod
+        // Standard way to connect to a service UUID
+        BluetoothSocket socket = device.createRfcommSocketToServiceRecord(uuid);
         if (socket == null) {
             throw new IOException("socket connection not established");
         }
 
-        // Cancel discovery, even though we didn't start it
+        // Cancel discovery, as it can slow down the connection
         bluetoothAdapter.cancelDiscovery();
 
         socket.connect();
@@ -59,11 +62,59 @@ public abstract class BluetoothConnection
         connectionThread = new ConnectionThread(socket);
         connectionThread.start();
     }
-    /// Connects to given device by hardware address (default UUID used)
+
+    /**
+     * Connects to a given device by its hardware address using the default SPP UUID.
+     *
+     * @param address The MAC address of the remote device.
+     * @throws IOException if the connection fails.
+     */
     public void connect(String address) throws IOException {
         connect(address, DEFAULT_UUID);
     }
-    
+
+    /**
+     * Connects to a given device by its hardware address and a specific RFCOMM port.
+     * This method uses reflection to invoke the hidden Android API `createRfcommSocket(int channel)`.
+     * Use this if you know the exact RFCOMM channel and need to bypass SDP service discovery.
+     *
+     * @param address The MAC address of the remote device.
+     * @param port The RFCOMM port (channel) to connect to.
+     * @throws IOException if the connection fails, for example, due to reflection errors or connection timeout.
+     */
+    public void connect(String address, int port) throws IOException {
+        if (isConnected()) {
+            throw new IOException("already connected");
+        }
+
+        BluetoothDevice device = bluetoothAdapter.getRemoteDevice(address);
+        if (device == null) {
+            throw new IOException("device not found");
+        }
+
+        BluetoothSocket socket;
+        try {
+            // Use reflection to call the hidden `createRfcommSocket` method
+            Method method = device.getClass().getMethod("createRfcommSocket", new Class[] { int.class });
+            socket = (BluetoothSocket) method.invoke(device, port);
+        } catch (NoSuchMethodException | IllegalAccessException | InvocationTargetException e) {
+            // Chain the reflection-related exception for better debugging
+            throw new IOException("Failed to create RFCOMM socket for port " + port + " using reflection.", e);
+        }
+
+        if (socket == null) {
+            throw new IOException("socket connection not established");
+        }
+
+        // Cancel discovery, as it can slow down the connection
+        bluetoothAdapter.cancelDiscovery();
+
+        socket.connect();
+
+        connectionThread = new ConnectionThread(socket);
+        connectionThread.start();
+    }
+
     /// Disconnects current session (ignore if not connected)
     public void disconnect() {
         if (isConnected()) {
@@ -72,7 +123,7 @@ public abstract class BluetoothConnection
         }
     }
 
-    /// Writes to connected remote device 
+    /// Writes to connected remote device
     public void write(byte[] data) throws IOException {
         if (!isConnected()) {
             throw new IOException("not connected");
@@ -93,7 +144,7 @@ public abstract class BluetoothConnection
         private final InputStream input;
         private final OutputStream output;
         private boolean requestedClosing = false;
-        
+
         ConnectionThread(BluetoothSocket socket) {
             this.socket = socket;
             InputStream tmpIn = null;
@@ -121,7 +172,7 @@ public abstract class BluetoothConnection
 
                     onRead(Arrays.copyOf(buffer, bytes));
                 } catch (IOException e) {
-                    // `input.read` throws when closed by remote device
+                    // `input.read` throws when closed by remote device or socket is closed locally
                     break;
                 }
             }
